@@ -3,15 +3,28 @@ from typing import BinaryIO
 from multiprocessing import Pool
 import regex as re
 from collections import Counter
+import heapq
+from dataclasses import dataclass
 
 # patch = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 patch = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+@dataclass(frozen=True, slots=True)
+class MaxPairEntry:
+    count: int
+    pair: tuple[bytes, bytes]
+
+    def __lt__(self, other: "MaxPairEntry") -> bool:
+        if self.count != other.count:
+            return self.count > other.count
+        return self.pair > other.pair
 
 class BPETrainerState:
     def __init__(self, special_tokens_bytes):
         self.word_counts = Counter()
         self.pair_counts = Counter()
         self.pair_to_words: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]] = {}
+        self.pair_heap: list[MaxPairEntry] = []
         self.merges: list[tuple[bytes, bytes]] = []
         self.vocab: dict[int, bytes] = {
                 i: bytes([i])
@@ -20,41 +33,63 @@ class BPETrainerState:
         for stb in special_tokens_bytes:
             self.vocab[len(self.vocab)] = stb
         
+    def _rebuild_pair_heap(self):
+        self.pair_heap = [
+            MaxPairEntry(count, pair)
+            for pair, count in self.pair_counts.items()
+            if count > 0
+        ]
+        heapq.heapify(self.pair_heap)
+        
+    def _push_pair_snapshot(self, pair: tuple[bytes, bytes]):
+        count = self.pair_counts.get(pair, 0)
+        if count > 0:
+            heapq.heappush(self.pair_heap, MaxPairEntry(count, pair))
+        
     def initialize(self):
         for word, word_f in self.word_counts.items():
-            for i in range(len(word) - 1):
-                pair = (word[i], word[i + 1])
-                self.pair_counts[pair] += word_f
+            pair_multiplicities = Counter(zip(word, word[1:]))
+            for pair, occurrences in pair_multiplicities.items():
+                self.pair_counts[pair] += (word_f * occurrences)
                 self.pair_to_words.setdefault(pair, set()).add(word)
+        self._rebuild_pair_heap()
                 
     def add_vocab(self, word):
         self.vocab[len(self.vocab)] = word
                 
     def best_pair(self):
-        if not self.pair_counts:
-            return None
-        pair, _ = max(self.pair_counts.items(), key=lambda item: (item[1], item[0]))
-        return pair
+        if len(self.pair_heap) > 4 * max(1, len(self.pair_counts)):
+            self._rebuild_pair_heap()
+        while self.pair_heap:
+            entry = self.pair_heap[0]
+            current_count = self.pair_counts.get(entry.pair, 0)
+            if current_count == entry.count:
+                return entry.pair
+            heapq.heappop(self.pair_heap)
+        return None
     
     def add_word_pairs(self, word, freq):
-        for i in range(len(word) - 1):
-            p = (word[i], word[i + 1])
-            self.pair_counts[p] += freq
-            self.pair_to_words.setdefault(p, set()).add(word)
+        pair_multiplicities = Counter(zip(word, word[1:]))
+        for pair, occurrences in pair_multiplicities.items():
+            self.pair_counts[pair] += (freq * occurrences)
+            self.pair_to_words.setdefault(pair, set()).add(word)
+            self._push_pair_snapshot(pair)
+
             
     def remove_word_pairs(self, word, freq):
-        for i in range(len(word) - 1):
-            p = (word[i], word[i + 1])
-
-            self.pair_counts[p] -= freq
-            if self.pair_counts[p] <= 0:
-                del self.pair_counts[p]
-
-            words = self.pair_to_words.get(p)
+        pair_multiplicities = Counter(zip(word, word[1:]))
+        for pair, occurrences in pair_multiplicities.items():
+            new_count = (self.pair_counts[pair] - freq * occurrences)
+            if new_count <= 0:
+                del self.pair_counts[pair]
+            else:
+                self.pair_counts[pair] = new_count
+                self._push_pair_snapshot(pair)
+            words = self.pair_to_words.get(pair)
             if words is not None:
                 words.discard(word)
                 if not words:
-                    del self.pair_to_words[p]
+                    del self.pair_to_words[pair]
     
     def merge_word(self, word, pair):
         merged = pair[0] + pair[1]
@@ -174,12 +209,12 @@ def bpe_train_form_file(
     # get sliced bondaries
     with open(input_path, "rb") as f:
         # the chunk size func may be changed later
-        desired_chunk_size = 16384
+        desired_chunk_size = 16384*192
         chunk_boundary = find_chunk_boundaries(f, desired_chunk_size, special_tokens_bytes)
         
     special_pattern = "|".join(re.escape(tok) for tok in special_tokens)
     tasks = [(input_path, start, end, special_pattern) for start, end in zip(chunk_boundary[:-1], chunk_boundary[1:])]
-    with Pool(processes=5) as pool:
+    with Pool(processes=10) as pool:
         scan_results = pool.map(scan_chunk, tasks)
         
     for counts in scan_results:

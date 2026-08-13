@@ -54,3 +54,16 @@ UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe4 in position 0: unexpect
 "10111111 10111111"
 ```
 起始字节不以"110..."开头，则非合法utf-8字节。
+
+## Problem (train_bpe_tinystories):  BPE Training on TinyStories (2 points)
+
+**(a) Train a byte-level BPE tokenizer on the TinyStories dataset, using a maximum vocabulary size of 10,000. Make sure to add the TinyStories <|endoftext|> special token to the vocabulary. Serialize the resulting vocabulary and merges to disk for further inspection. How much time and memory did training take? What is the longest token in the vocabulary? Does it make sense?
+Resource requirements: ≤ 30 minutes (no GPUs), ≤ 30 GB RAM**
+
+Memory：833 MiB
+Time：143s
+longest token: ' accomplishment'/' disappointment'/' responsibility'
+
+**(b) Profile your code. What part of the tokenizer training process takes the most time?**
+
+pretokenize.
