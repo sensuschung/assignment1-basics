@@ -67,3 +67,12 @@ longest token: ' accomplishment'/' disappointment'/' responsibility'
 **(b) Profile your code. What part of the tokenizer training process takes the most time?**
 
 pretokenize.
+
+## Problem (train_bpe_expts_owt):  BPE Training on OpenWebText (2 points)
+
+**(a) Train a byte-level BPE tokenizer on the OpenWebText dataset, using a maximum vocabulary size of 32,000. Serialize the resulting vocabulary and merges to disk for further inspection. What is the longest token in the vocabulary? Does it make sense? Resource requirements: ≤ 12 hours (no GPUs), ≤ 100 GB RAM
+Deliverable: A one-to-two sentence response.**
+
+The longest tokens are tied at 64 bytes: a repeated mojibake sequence (ÃÂ...) and a sequence of 64 hyphens. This makes sense because OpenWebText contains web-scraping artifacts, encoding corruption, and long separator lines, while byte-level BPE learns frequent byte patterns without considering their semantic meaning.
+
+**(b) Compare and contrast the tokenizer that you get training on TinyStories versus OpenWebText. Deliverable: A one-to-two sentence response**
