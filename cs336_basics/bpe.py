@@ -5,6 +5,7 @@ import regex as re
 from collections import Counter
 import heapq
 from dataclasses import dataclass
+from tqdm import tqdm
 
 # patch = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 patch = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -215,18 +216,21 @@ def bpe_train_form_file(
     special_pattern = "|".join(re.escape(tok) for tok in special_tokens)
     tasks = [(input_path, start, end, special_pattern) for start, end in zip(chunk_boundary[:-1], chunk_boundary[1:])]
     with Pool(processes=10) as pool:
-        scan_results = pool.map(scan_chunk, tasks)
-        
-    for counts in scan_results:
-        bpe_train_box.word_counts.update(counts)
+        results = pool.imap_unordered(scan_chunk, tasks, chunksize=1)
+        for counts in tqdm(results, total=len(tasks), desc="Pre-tokenizing", unit="chunk"):
+            bpe_train_box.word_counts.update(counts)
     
     bpe_train_box.initialize()
         
-    while len(bpe_train_box.vocab) < vocab_size:
-        target_pair = bpe_train_box.best_pair()
-        if target_pair is None:
-            break
-        bpe_train_box.merge_pair(target_pair)
+    num_merges = vocab_size - len(bpe_train_box.vocab)
+
+    with tqdm(total=num_merges, desc="BPE merging", unit="merge") as progress:
+        while len(bpe_train_box.vocab) < vocab_size:
+            target_pair = bpe_train_box.best_pair()
+            if target_pair is None:
+                break
+            bpe_train_box.merge_pair(target_pair)
+            progress.update(1)
         
     return (bpe_train_box.vocab, bpe_train_box.merges)
         
